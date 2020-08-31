@@ -1,0 +1,29 @@
+=======Instação do Latex no Windows========
+1.Baixe o compilador de tex, nesse caso o 'Miktex'
+Link: https://miktex.org/download
+2.Instale o miktex
+3.Baixe o editor de latex 'TexStudio'
+Link: https://www.texstudio.org/
+4.Instale o TexStudio
+5.Use o modelo latex disponibilizado pelo professor. O aquivo que será editado é o 'bare_jrnl.tex'
+
+
+======Instalação do Latex no Linux=================
+1.Antes de instalarmos o LaTeX, devemos atualizar a lista de pacotes e, se possível, os pacotes da distribuição Linux. Para tal podemos utilizar os comandos abaixo:
+sudo apt-get update
+sudo apt-get upgrade
+
+2.Instale os componentes básicos do Latex usando o comando
+
+sudo apt-get install texlive texlive-latex-base texlive-latex-recommended \
+texlive-latex-extra texlive-lang-portuguese
+
+3.A partir deste ponto já temos a distribuição LaTeX instalada, agora precisamos instalar um editor, a primeira opção de editor é o Texmaker, que pode ser instalado executando os comandos:
+
+apt-get install texmaker
+
+4.Caso queira compilar o arquivo .tex no terminal mesmo use o comando
+
+pdflatex bare_jrnl.tex
+
+5.Verifique se foi criado o arquivo pdf na pasta do modelo.
