@@ -1,31 +1,44 @@
-/*  Programa de demonstracao de uso de sockets UDP em C no Linux
+/*  Programa de demonstração de uso de sockets UDP em C no Linux.
  *  Funcionamento:
- *  Usuario escolhe opcao no menu e entao envia uma msg para a caldeira.
+ *  Usuário escolhe opção no menu e então envia uma msg para a caldeira.
  */
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <string.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
-#include <stdio.h>
 #include <errno.h>
-#include <stdlib.h>
 #include <netdb.h>
-#include <string.h>
-#include <time.h>
+#include <netinet/in.h>
 #include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+#define CLEAR "cls"
+#else  //In any unix.
+#define CLEAR "clear"
+#endif
+
 #define FALHA 1
-#define NSEC_PER_SEC    (1000000000) 
+#define NSEC_PER_SEC (1000000000)
+#define MSG_ALARME "Alarme! Temperatura está acima de 30ºC:"
+
+// Constantes do Sistema.
+#define S 4184
+#define P 1000
+#define B 4
+#define R 0.001
 
 pthread_mutex_t em = PTHREAD_MUTEX_INITIALIZER;
+static double limite_atual = 30;
 
 struct timespec t;
 struct sockaddr_in cria_endereco_destino(char *destino, int porta_destino);
 
-struct arg_struct { 
+struct arg_struct {
     int socket_local;
     struct sockaddr_in endereco_destino;
 };
@@ -33,278 +46,399 @@ struct arg_struct {
 void controle_nivel_agua();
 void controle_temperatura();
 void verifica_temperatura(void *arguments);
+void verifica_sensores(void *arguments);
+char *communicate_socket(struct arg_struct *args, char *msg);
 
+void show_menu(void *socket_args);
+void info(void *socket_args);
+void show_info(void);
+void print_sensors_status();
+void alarme(void);
 int cria_socket_local(void);
 void envia_mensagem(int socket_local, struct sockaddr_in endereco_destino, char *mensagem);
 int recebe_mensagem(int socket_local, char *buffer, int TAM_BUFFER);
+void logErros(void);
+void clear_screen(void);
+float calculo_controle_temperatura();
 
+//Valores de Referência para controle
+static float temperatura = 20;
+static float ni = 1;
+static float na = 5;
+static float nf = 50;
 
+// Valores Sensores e atuadores
+static float ta;
+static float ti;
+static float temp;
+static float no;
+static float h;
+static float q;
 
-int main(int argc, char *argv[])
-{
-	if (argc < 3) {
-		fprintf(stderr,"Uso: controlemanual <endereco> <porta>\n");
-		fprintf(stderr,"<endereco> eh o endereco IP da caldeira\n");
-		fprintf(stderr,"<porta> eh o numero da porta UDP da caldeira\n");
-		fprintf(stderr,"Exemplo de uso:\n");
-		fprintf(stderr,"   controlemanual localhost 12345\n");
-		exit(FALHA);
-	}
+int main(int argc, char *argv[]) {
+    if (argc < 3) {
+        logErros();
+    }
+    int porta_destino = atoi(argv[2]);
+    struct arg_struct socket_args;
+    pthread_t t1, t2, t3, t4;
 
-	int porta_destino = atoi( argv[2]);
-	
+    socket_args.socket_local = cria_socket_local();
+    socket_args.endereco_destino = cria_endereco_destino(argv[1], porta_destino);
 
-	struct arg_struct socket_args;
+    pthread_create(&t1, NULL, (void *)controle_temperatura, (void *)&socket_args);
+    pthread_create(&t2, NULL, (void *)controle_nivel_agua, (void *)&socket_args);
+    pthread_create(&t3, NULL, (void *)verifica_temperatura, (void *)&socket_args);
+    pthread_create(&t4, NULL, (void *)verifica_sensores, (void *)&socket_args);
 
-	socket_args.socket_local = cria_socket_local();
-	socket_args.endereco_destino = cria_endereco_destino(argv[1], porta_destino);
+    show_menu((void *)&socket_args);
+}
+void show_menu(void *socket_args) {
+    char opcao = 0;
+    while (opcao == 0) {
+        //Primeira Tela.
+        clear_screen();
+        printf("Valores de Referência para Controle: \n\r");
+        printf("T: %.2fºC || Ni: %.2fkg/s || Na: %.2fkg/s || Nf: %.2fkg/s \n", temperatura, ni, na, nf);  //Digite a letra da opção seguida pelo valor, no caso de atuadores:
+        printf("\n");
+        printf("Digite a letra da opção desejada:\n");
+        printf("a. Definir temperatura.\n");
+        printf("b. Definir nível de água.\n");
+        printf("c. Visualizar valores dos sensores.\n");
+        printf("x. Terminar o programa.\n");
+        printf("\n\r");
+        printf("Opção: ");
 
-	char opcao;
-	do{
-		char teclado[1000];
-		double valor;
-		char msg_enviada[1000];  
-		char msg_recebida[1000];
-		int nrec;
+        char teclado[1000];
+        fgets(teclado, 1000, stdin);
+        opcao = teclado[0];
+    }
 
-		pthread_t t1, t2, t3;
-		
-		pthread_create(&t1, NULL, (void *) controle_temperatura, (void *) &socket_args);
-		pthread_create(&t2, NULL, (void *) controle_nivel_agua, (void *) &socket_args);
-		pthread_create(&t3, NULL, (void *) verifica_temperatura, (void *) &socket_args);
+    //Segunda Tela.
+    clear_screen();
+    switch (opcao) {
+        case 'a':
+            printf("Digite a temperatura desejada: ");
+            scanf("%f", &temperatura);
+            break;
+        case 'b':
+            printf("Digite o valor de Ni: ");
+            scanf("%f", &ni);
+            printf("Digite o valor de Na: ");
+            scanf("%f", &na);
+            printf("Digite o valor de Nf: ");
 
+            scanf("%f", &nf);
+            break;
+        case 'c':
+            info((void *)&socket_args);
+            break;
+        case 'x':
+            exit(0);
+            break;
+        default:
+            printf("Opção %c não existe.\n", opcao);
+    }
 
-		printf("\n");   //\\Digite a letra da opcao seguida pelo valor, no caso de atuadores:);
-		printf("<x> Termina o programa\n");
-		printf("<a> Lê valor de Ta\n");
-		printf("<t> Lê valor de T\n");
-		printf("<i> Lê valor de Ti\n");
-		printf("<o> Lê valor de No\n");
-		printf("<h> Lê valor de H\n");
-		printf("<I><valor> Define valor de Ni\n");
-		printf("<Q><valor> Define valor de Q\n");
-		printf("<A><valor> Define valor de Na\n");
-		printf("<F><valor> Define valor de Nf\n"); 
-		printf("Digite a letra da opcao seguida pelo valor, no caso de atuadores:\n");
-
-		fgets( teclado, 1000, stdin);
-		opcao = teclado[0];
-		switch( opcao ) {
-			case 'x':	exit(0);
-			case 'a':	strcpy( msg_enviada, "sta0");
-						break;
-			case 't':	strcpy( msg_enviada, "st-0");
-						break;
-			case 'i':	strcpy( msg_enviada, "sti0");
-						break;
-			case 'o':	strcpy( msg_enviada, "sno0");
-						break;
-			case 'h':	strcpy( msg_enviada, "sh-0");
-						break;
-			case 'I':	valor = atof( &teclado[1] );
-						sprintf( msg_enviada, "ani%lf", valor);
-						break;
-			case 'Q':	valor = atof( &teclado[1] );
-						sprintf( msg_enviada, "aq-%lf", valor);
-						break;
-			case 'A':	valor = atof( &teclado[1] );
-						sprintf( msg_enviada, "ana%lf", valor);
-						break;
-			case 'F':	valor = atof( &teclado[1] );
-						sprintf( msg_enviada, "anf%lf", valor); 
-						break;
-			default:	printf("Opcao %c nao existe.\n", opcao);
-						continue;
-			}
-
-		printf("Enviado: %s\n", msg_enviada);
-		envia_mensagem(socket_args.socket_local, socket_args.endereco_destino, msg_enviada);
-
-		nrec = recebe_mensagem(socket_args.socket_local, msg_recebida, 1000);
-		msg_recebida[nrec] = '\0';
-		printf("Mensagem de resposta com %d bytes >>>%s<<<\n", nrec, msg_recebida);
-
-	} while( opcao != 'x' );
-
+    show_menu((void *)&socket_args);
 }
 
-int cria_socket_local(void)
-{
-	int socket_local;		// Socket usado na comunicacao.
+void info(void *socket_args) {
+    pthread_t t5;
 
-	socket_local = socket( PF_INET, SOCK_DGRAM, 0);
-	if (socket_local < 0) {
-		perror("socket");
-		return -1;
-	}
-	return socket_local;
+    char parar_info = 0;
+    while (parar_info == 0) {
+        pthread_create(&t5, NULL, (void *)print_sensors_status, NULL);
+        parar_info = getchar();
+    }
+    pthread_cancel(t5);
 }
 
-struct sockaddr_in cria_endereco_destino(char *destino, int porta_destino)
-{
-	struct sockaddr_in servidor;	// Endereco do servidor incluindo ip e porta.
-	struct hostent *dest_internet;	// Endereco destino em formato proprio.
-	struct in_addr dest_ip;			// Endereco destino em formato ip numerico.
-
-	if (inet_aton ( destino, &dest_ip ))
-		dest_internet = gethostbyaddr((char *)&dest_ip, sizeof(dest_ip), AF_INET);
-	else
-		dest_internet = gethostbyname(destino);
-
-	if (dest_internet == NULL) {
-		fprintf(stderr,"Endereco de rede invalido\n");
-		exit(FALHA);
-	}
-
-	memset((char *) &servidor, 0, sizeof(servidor));
-	memcpy(&servidor.sin_addr, dest_internet->h_addr_list[0], sizeof(servidor.sin_addr));
-	servidor.sin_family = AF_INET;
-	servidor.sin_port = htons(porta_destino);
-
-	return servidor;
+void show_info(void) {
+    //Terceira Tela.
+    clear_screen();
+    printf("Valores de Referência para Controle: \n\r");
+    printf("T: %.2fºC || Na: %.2fºC || Ni: %.2fºC || Nf: %.2fkg/s\n\n\r", temperatura, na, ni, nf);
+    printf("Leitura dos Sensores: \n\r");
+    printf("Ta: %.2fºC || T: %.2fºC || Ti: %.2fºC || No: %.2fkg/s || H: %.2fm\n\n\r", ta, temp, ti, no, h);
+    printf("Pressione enter para voltar ao menu principal!\n");
 }
 
+char *communicate_socket(struct arg_struct *args, char *msg) {
+    int nrec = 0;
+    char msg_enviada[1000];
+    char *msg_recebida = malloc(1000 * sizeof(char));
 
-void envia_mensagem(int socket_local, struct sockaddr_in endereco_destino, char *mensagem)
-{
-	// Envia msg ao servidor.
+    strcpy(msg_enviada, msg);
+    envia_mensagem(args->socket_local, args->endereco_destino, msg_enviada);
+    nrec = recebe_mensagem(args->socket_local, msg_recebida, 1000);
+    msg_recebida[nrec] = '\0';
 
-	if (sendto(socket_local, mensagem, strlen(mensagem)+1, 0, (struct sockaddr *) &endereco_destino, sizeof(endereco_destino)) < 0 )
-	{ 
-		perror("sendto");
-		return;
-	}
+    return msg_recebida;
 }
 
+void controle_temperatura(void *arguments) {
+    struct arg_struct *args = arguments;
 
-int recebe_mensagem(int socket_local, char *buffer, int TAM_BUFFER)
-{
-	int bytes_recebidos;		// Número de bytes recebidos.
+    long int periodo = 50000000;  // 50ms.
 
-	// Espera pela mensagem de resposta do servidor.
-	bytes_recebidos = recvfrom(socket_local, buffer, TAM_BUFFER, 0, NULL, 0);
-	if (bytes_recebidos < 0)
-	{
-		perror("recvfrom");
-	}
+    // Le a hora atual, coloca em t.
+    clock_gettime(CLOCK_MONOTONIC, &t);
 
-	return bytes_recebidos;
+    // Tarefa periódica iniciará em 1 segundo.
+    t.tv_sec++;
+
+    while (1) {
+        // Espera até início do próximo período.
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
+
+        char mensagem_recebida[1000];
+        char mensagem_enviada[1000];
+
+        // Realiza seu trabalho.
+        pthread_mutex_lock(&em);
+
+        na += calculo_controle_temperatura();
+        sprintf(mensagem_enviada, "%s%.2f", "ana", na);
+        strcpy(mensagem_recebida, communicate_socket(args, mensagem_enviada));
+
+        //this will copy the returned value of createStr() into a[]
+        pthread_mutex_unlock(&em);
+
+        // Calcula início do proximo periodo.
+        t.tv_nsec += periodo;
+        while (t.tv_nsec >= NSEC_PER_SEC) {
+            t.tv_nsec -= NSEC_PER_SEC;
+            t.tv_sec++;
+        }
+    }
 }
 
-void controle_temperatura(void *arguments){
-	struct arg_struct *args = arguments;
-	long int periodo = 50000000; 	// 50ms.
+float calculo_controle_temperatura() {
+    // Variáveis globais.
+    // Na,
 
-	// Le a hora atual, coloca em t.
-	clock_gettime(CLOCK_MONOTONIC ,&t);
+    // Variáveis calculadas.
+    float C = S * P * B * h;
+    float qi = ni * S * (ti - temp);
+    float qe = (temp - ta) / R;
+    float qa = na * S * (80 - temp);
+    float qt = (q + qi + qa - qe);
+    float derivada_temperatura_sobre_tempo = (1 / C) * qt;
 
-	// Tarefa periodica iniciará em 1 segundo.
-	t.tv_sec++;
+    // Constantes setadas experimentalmente.
+    float Kp = 1;
+    float Kd = .1;
 
-	while(1) {
-		// Espera ateh inicio do próximo período.
-		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
+    float erro = (temp - temperatura) / temperatura;
 
-		char msg_enviada[1000];
-		char msg_recebida[1000];
-		int nrec;
-
-		strcpy( msg_enviada, "aq-567.8");
-		envia_mensagem(args->socket_local, args->endereco_destino, msg_enviada);
-		nrec = recebe_mensagem(args->socket_local, msg_recebida, 1000);
-		msg_recebida[nrec] = '\0';
-
-		// Realiza seu trabalho.
-		pthread_mutex_lock(&em);
-		
-		pthread_mutex_unlock(&em);
-
-		// Calcula início do proximo periodo.
-		t.tv_nsec += periodo;
-		while (t.tv_nsec >= NSEC_PER_SEC) {
-			t.tv_nsec -= NSEC_PER_SEC;
-			t.tv_sec++;
-		}
-	}
+    //Saída;
+    float output = na * (derivada_temperatura_sobre_tempo * Kd + Kp) * erro;
+    printf("%.2f \n ", derivada_temperatura_sobre_tempo);
+    return output;
 }
 
-void controle_nivel_agua(void *arguments){
-	struct arg_struct *args = arguments;
-	long int periodo = 70000000; 	// 70ms
- 
-	// Lê a hora atual, coloca em t.
-	clock_gettime(CLOCK_MONOTONIC ,&t);
+void controle_nivel_agua(void *arguments) {
+    struct arg_struct *args = arguments;
+    long int periodo = 70000000;  // 70ms
 
-	// Tarefa periodica iniciará em 1 segundo.
-	t.tv_sec++;
+    // Lê a hora atual, coloca em t.
+    clock_gettime(CLOCK_MONOTONIC, &t);
 
-	while(1) {
-		// Espera ateh início do proximo período.
-		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
+    // Tarefa periodica iniciará em 1 segundo.
+    t.tv_sec++;
 
-		pthread_mutex_lock(&em); // Realiza seu trabalho.
+    while (1) {
+        // Espera ateh início do proximo período.
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
 
-		char msg_enviada[1000];
-		char msg_recebida[1000];
-		int nrec;
+        pthread_mutex_lock(&em);
+        // Realiza seu trabalho.
+        /*
+        char s[1000];
+        sprintf(s, "%s%.2f", "ani", ni);
+        communicate_socket(args, s);
 
-		strcpy( msg_enviada, "ana123.4");
-		envia_mensagem(args->socket_local, args->endereco_destino, msg_enviada);
-		nrec = recebe_mensagem(args->socket_local, msg_recebida, 1000);
-		msg_recebida[nrec] = '\0';
-		
-		pthread_mutex_unlock(&em);
+        sprintf(s, "%s%.2f", "ana", na);
+        communicate_socket(args, s);
 
-		// Calcula início do próximo período.
-		t.tv_nsec += periodo;
-		while (t.tv_nsec >= NSEC_PER_SEC) {
-			t.tv_nsec -= NSEC_PER_SEC;
-			t.tv_sec++;
-		}
-	}
-}
-void alarme(){
+        sprintf(s, "%s%.2f", "anf", nf);
+        communicate_socket(args, s);
+        */
 
-}
+        pthread_mutex_unlock(&em);
 
-void verifica_temperatura(void *arguments){
-	struct arg_struct *args = arguments;
-	long int periodo = 10000000; 	// 10ms
-	
-	// Lê a hora atual, coloca em t.
-	clock_gettime(CLOCK_MONOTONIC ,&t);
-
-	// Tarefa periodica iniciará em 1 segundo.
-	t.tv_sec++;
-
-	printf("Socket Local : %d \n", args->socket_local);
-
-	while(1) {
-		// Espera ateh inicio do proximo periodo
-
-		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
-
-		char msg_enviada[1000];
-		char msg_recebida[1000];
-		int nrec;
-
-		pthread_mutex_lock(&em);
-
-		strcpy( msg_enviada, "sta0");
-		envia_mensagem(args->socket_local, args->endereco_destino, msg_enviada);
-		nrec = recebe_mensagem(args->socket_local, msg_recebida, 1000);
-		msg_recebida[nrec] = '\0';
-
-		printf("Mensagem de resposta com %d bytes %s\n", nrec, msg_recebida);
-	
-		pthread_mutex_unlock(&em);
-
-		// Calcula inicio do proximo periodo
-		t.tv_nsec += periodo;
-		while (t.tv_nsec >= NSEC_PER_SEC) {
-			t.tv_nsec -= NSEC_PER_SEC;
-			t.tv_sec++;
-		}
-	}
+        // Calcula início do próximo período.
+        t.tv_nsec += periodo;
+        while (t.tv_nsec >= NSEC_PER_SEC) {
+            t.tv_nsec -= NSEC_PER_SEC;
+            t.tv_sec++;
+        }
+    }
 }
 
+void alarme(void) {
+    if (temp > limite_atual) {
+        printf("%s %.2fºC\n\n\r", MSG_ALARME, temp);
+    }
+}
+
+void verifica_temperatura(void *arguments) {
+    struct arg_struct *args = arguments;
+    long int periodo = 10000000;  // 10ms
+
+    // Lê a hora atual, coloca em t.
+    clock_gettime(CLOCK_MONOTONIC, &t);
+
+    // Tarefa periodica iniciará em 1 segundo.
+    t.tv_sec++;
+
+    while (1) {
+        // Espera ateh inicio do proximo periodo
+
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
+
+        pthread_mutex_lock(&em);
+        alarme();
+        pthread_mutex_unlock(&em);
+
+        // Calcula inicio do proximo periodo
+        t.tv_nsec += periodo;
+        while (t.tv_nsec >= NSEC_PER_SEC) {
+            t.tv_nsec -= NSEC_PER_SEC;
+            t.tv_sec++;
+        }
+    }
+}
+
+void print_sensors_status() {
+    long int periodo = 10000000;  // 10ms
+    // Lê a hora atual, coloca em t.
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    t.tv_sec++;
+
+    while (1) {
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
+
+        show_info();
+
+        // Calcula inicio do proximo periodo
+        t.tv_nsec += periodo;
+        while (t.tv_nsec >= NSEC_PER_SEC) {
+            t.tv_nsec -= NSEC_PER_SEC;
+            t.tv_sec++;
+        }
+    }
+}
+
+void verifica_sensores(void *arguments) {
+    struct arg_struct *args = arguments;
+    long int periodo = 10000000;  // 10ms
+
+    // Lê a hora atual, coloca em t.
+    clock_gettime(CLOCK_MONOTONIC, &t);
+
+    // Tarefa periodica iniciará em 1 segundo.
+    t.tv_sec++;
+
+    while (1) {
+        // Espera ateh inicio do proximo periodo
+        char *s;
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
+
+        pthread_mutex_lock(&em);
+
+        s = communicate_socket(args, "sta0");
+        char *token = strtok(s, "sta");
+        ta = atof(token);
+
+        s = communicate_socket(args, "sti0");
+        token = strtok(s, "sti");
+        ti = atof(token);
+
+        s = communicate_socket(args, "st-0");
+        char *b = s + 3;
+        temp = atof(b);
+
+        s = communicate_socket(args, "sh-0");
+        token = strtok(s, "sh-");
+        h = atof(token);
+
+        pthread_mutex_unlock(&em);
+
+        // Calcula inicio do proximo periodo
+        t.tv_nsec += periodo;
+        while (t.tv_nsec >= NSEC_PER_SEC) {
+            t.tv_nsec -= NSEC_PER_SEC;
+            t.tv_sec++;
+        }
+    }
+}
+
+void clear_screen(void) {
+    system(CLEAR);
+}
+
+int cria_socket_local(void) {
+    int socket_local;  // Socket usado na comunicacao.
+
+    socket_local = socket(PF_INET, SOCK_DGRAM, 0);
+    if (socket_local < 0) {
+        perror("socket");
+        return -1;
+    }
+    return socket_local;
+}
+
+void logErros(void) {
+    fprintf(stderr, "Uso: controlemanual <endereco> <porta>.\n");
+    fprintf(stderr, "<endereco> é o endereco IP da caldeira.\n");
+    fprintf(stderr, "<porta> é o número da porta UDP da caldeira.\n");
+    fprintf(stderr, "Exemplo de uso:\n");
+    fprintf(stderr, "   controlemanual localhost 12345\n");
+    exit(FALHA);
+}
+
+struct sockaddr_in cria_endereco_destino(char *destino, int porta_destino) {
+    struct sockaddr_in servidor;    // Endereco do servidor incluindo ip e porta.
+    struct hostent *dest_internet;  // Endereco destino em formato proprio.
+    struct in_addr dest_ip;         // Endereco destino em formato ip numerico.
+
+    if (inet_aton(destino, &dest_ip))
+        dest_internet = gethostbyaddr((char *)&dest_ip, sizeof(dest_ip), AF_INET);
+    else
+        dest_internet = gethostbyname(destino);
+
+    if (dest_internet == NULL) {
+        fprintf(stderr, "Endereço de rede inválido.\n");
+        exit(FALHA);
+    }
+
+    memset((char *)&servidor, 0, sizeof(servidor));
+    memcpy(&servidor.sin_addr, dest_internet->h_addr_list[0], sizeof(servidor.sin_addr));
+    servidor.sin_family = AF_INET;
+    servidor.sin_port = htons(porta_destino);
+
+    return servidor;
+}
+
+void envia_mensagem(int socket_local, struct sockaddr_in endereco_destino, char *mensagem) {
+    // Envia msg ao servidor.
+
+    if (sendto(socket_local, mensagem, strlen(mensagem) + 1, 0, (struct sockaddr *)&endereco_destino, sizeof(endereco_destino)) < 0) {
+        perror("sendto");
+        return;
+    }
+}
+
+int recebe_mensagem(int socket_local, char *buffer, int TAM_BUFFER) {
+    int bytes_recebidos;  // Número de bytes recebidos.
+
+    // Espera pela mensagem de resposta do servidor.
+    bytes_recebidos = recvfrom(socket_local, buffer, TAM_BUFFER, 0, NULL, 0);
+    if (bytes_recebidos < 0) {
+        perror("recvfrom");
+    }
+
+    return bytes_recebidos;
+}
