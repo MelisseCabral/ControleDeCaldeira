@@ -9,16 +9,7 @@
       "type": "cppdbg",
       "request": "launch",
       "program": "${fileDirname}/${fileBasenameNoExtension}",
-      "args": [
-        "-g",
-        "${file}",
-        "-o",
-        "${fileDirname}/${fileBasenameNoExtension}",
-        "-l",
-        "pthread",
-        "localhost",
-        "12345"
-      ],
+      "args": ["localhost", "12345"],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
       "externalConsole": false,

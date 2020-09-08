@@ -16,6 +16,7 @@
 #include <time.h>
 #include <unistd.h>
 
+// Verifica se windows, para limpar terminal.
 #ifdef _WIN32
 #define CLEAR "cls"
 #else  //In any unix.
@@ -24,50 +25,68 @@
 
 #define FALHA 1
 #define NSEC_PER_SEC (1000000000)
-#define MSG_ALARME "Alarme! Temperatura está acima de 30ºC:"
 
-// Constantes do Sistema.
-#define S 4184
-#define P 1000
-#define B 4
-#define R 0.001
+FILE * fp;
 
 pthread_mutex_t em = PTHREAD_MUTEX_INITIALIZER;
-static double limite_atual = 30;
 
 struct timespec t;
-struct sockaddr_in cria_endereco_destino(char *destino, int porta_destino);
 
+// Comunicação socket.
+int cria_socket_local(void);
+void envia_mensagem(int socket_local, struct sockaddr_in endereco_destino, char *mensagem);
+int recebe_mensagem(int socket_local, char *buffer, int TAM_BUFFER);
+struct sockaddr_in cria_endereco_destino(char *destino, int porta_destino);
 struct arg_struct {
     int socket_local;
     struct sockaddr_in endereco_destino;
 };
+char *communicate_socket(struct arg_struct *args, char *msg);
 
+// Threads
 void controle_nivel_agua();
 void controle_temperatura();
 void verifica_temperatura(void *arguments);
 void verifica_sensores(void *arguments);
-char *communicate_socket(struct arg_struct *args, char *msg);
-
-void show_menu(void *socket_args);
-void info(void *socket_args);
-void show_info(void);
 void print_sensors_status();
-void alarme(void);
-int cria_socket_local(void);
-void envia_mensagem(int socket_local, struct sockaddr_in endereco_destino, char *mensagem);
-int recebe_mensagem(int socket_local, char *buffer, int TAM_BUFFER);
-void logErros(void);
-void clear_screen(void);
-float calculo_controle_temperatura();
 
-//Valores de Referência para controle
-static float temperatura = 20;
+// Interface usuário
+void show_menu(void);
+void info(void);
+void show_info(void);
+void alarme(void);
+void logErros(void);
+
+// Controles e cálculos.
+float calculo_controle_temperatura(float Kp , float Kd) ;
+float controle_ni(void);
+float controle_q(void);
+float calculo_controle_nivel_agua(float Kp , float Kd);
+float controle_na(void);
+float controle_nf(void);
+
+// Sistema.
+void clear_screen(void);
+
+// Variáveis de sistema.
+int flag_alarme = 0;
+int tela = 0;
+
+// Constantes de controle.
+static float S = 4184;
+static float P= 1000;
+static float B= 4;
+static float R= 0.001;
+
+// Valores de referência para controle.
+float temp_alarme_ref = 30;
+float temp_ref = 29;
+static float h_ref = 2.5;
 static float ni = 1;
 static float na = 5;
 static float nf = 50;
 
-// Valores Sensores e atuadores
+// Valores de sensores e atuadores.
 static float ta;
 static float ti;
 static float temp;
@@ -75,13 +94,19 @@ static float no;
 static float h;
 static float q;
 
+// Cria ponteiro e abre arquivo.
+FILE *fptr;
+
 int main(int argc, char *argv[]) {
+
+    pthread_t t1, t2, t3, t4;
+
     if (argc < 3) {
         logErros();
     }
+    
     int porta_destino = atoi(argv[2]);
     struct arg_struct socket_args;
-    pthread_t t1, t2, t3, t4;
 
     socket_args.socket_local = cria_socket_local();
     socket_args.endereco_destino = cria_endereco_destino(argv[1], porta_destino);
@@ -91,47 +116,60 @@ int main(int argc, char *argv[]) {
     pthread_create(&t3, NULL, (void *)verifica_temperatura, (void *)&socket_args);
     pthread_create(&t4, NULL, (void *)verifica_sensores, (void *)&socket_args);
 
-    show_menu((void *)&socket_args);
+    show_menu();
 }
-void show_menu(void *socket_args) {
+
+void show_menu(void) {
     char opcao = 0;
-    while (opcao == 0) {
-        //Primeira Tela.
-        clear_screen();
-        printf("Valores de Referência para Controle: \n\r");
-        printf("T: %.2fºC || Ni: %.2fkg/s || Na: %.2fkg/s || Nf: %.2fkg/s \n", temperatura, ni, na, nf);  //Digite a letra da opção seguida pelo valor, no caso de atuadores:
-        printf("\n");
-        printf("Digite a letra da opção desejada:\n");
-        printf("a. Definir temperatura.\n");
-        printf("b. Definir nível de água.\n");
-        printf("c. Visualizar valores dos sensores.\n");
-        printf("x. Terminar o programa.\n");
-        printf("\n\r");
-        printf("Opção: ");
 
-        char teclado[1000];
-        fgets(teclado, 1000, stdin);
-        opcao = teclado[0];
-    }
+    //Primeira Tela.
+    tela = 1;
 
-    //Segunda Tela.
     clear_screen();
+    printf("ATENÇÃO - Alarmes só serão emitidos na tela de informação (Opção c)\n\r\n");
+    printf("Valores de Referência para Controle: \n\r");
+    printf("T: %.2fºC || H: %.2fm \n", temp_ref, h_ref);  //Digite a letra da opção seguida pelo valor, no caso de atuadores:
+    printf("\n");
+    printf("Digite a letra da opção desejada:\n");
+    printf("a. Definir temperatura.\n");
+    printf("b. Definir nível de água.\n");
+    printf("c. Visualizar valores dos sensores.\n");
+    printf("x. Terminar o programa.\n");
+    printf("\n\r");
+    fprintf(stderr, "Opção: \n");
+
+
+    char teclado[1000];
+    fgets(teclado, 1000, stdin);
+    opcao = teclado[0];
+
+    clear_screen();
+    alarme();
     switch (opcao) {
         case 'a':
-            printf("Digite a temperatura desejada: ");
-            scanf("%f", &temperatura);
+            // Segunda Tela.
+            printf("Digite a temperatura desejada:  \n");
+            scanf("%f", &temp_ref);
             break;
         case 'b':
-            printf("Digite o valor de Ni: ");
-            scanf("%f", &ni);
-            printf("Digite o valor de Na: ");
-            scanf("%f", &na);
-            printf("Digite o valor de Nf: ");
-
-            scanf("%f", &nf);
-            break;
+            // Terceira Tela.
+            {
+                float novo_h;
+                printf("Digite o valor da altura desejada (h): \n");
+                scanf("%f", &novo_h);
+                if(novo_h >= 0.001 && novo_h <= 3){
+                    h_ref = novo_h;
+                } else
+                {
+                    printf("\n\n\rValor para nova altura é inválido, (0.001 >= h <= 3).");
+                    fflush(stdout);
+                    sleep(4);
+                }
+                
+                break;
+            }
         case 'c':
-            info((void *)&socket_args);
+            info();
             break;
         case 'x':
             exit(0);
@@ -140,25 +178,26 @@ void show_menu(void *socket_args) {
             printf("Opção %c não existe.\n", opcao);
     }
 
-    show_menu((void *)&socket_args);
+    show_menu();
 }
 
-void info(void *socket_args) {
+void info() {
     pthread_t t5;
 
     char parar_info = 0;
-    while (parar_info == 0) {
-        pthread_create(&t5, NULL, (void *)print_sensors_status, NULL);
-        parar_info = getchar();
-    }
+    pthread_create(&t5, NULL, (void *)print_sensors_status, NULL);
+    parar_info = getchar();
     pthread_cancel(t5);
 }
 
 void show_info(void) {
-    //Terceira Tela.
+    // Quarta Tela.
+    tela = 4;
+
     clear_screen();
+    alarme();
     printf("Valores de Referência para Controle: \n\r");
-    printf("T: %.2fºC || Na: %.2fºC || Ni: %.2fºC || Nf: %.2fkg/s\n\n\r", temperatura, na, ni, nf);
+    printf("T: %.2fºC || H: %.2fm \n\n\r", temp_ref, h_ref);
     printf("Leitura dos Sensores: \n\r");
     printf("Ta: %.2fºC || T: %.2fºC || Ti: %.2fºC || No: %.2fkg/s || H: %.2fm\n\n\r", ta, temp, ti, no, h);
     printf("Pressione enter para voltar ao menu principal!\n");
@@ -170,9 +209,11 @@ char *communicate_socket(struct arg_struct *args, char *msg) {
     char *msg_recebida = malloc(1000 * sizeof(char));
 
     strcpy(msg_enviada, msg);
+    pthread_mutex_lock(&em);
     envia_mensagem(args->socket_local, args->endereco_destino, msg_enviada);
     nrec = recebe_mensagem(args->socket_local, msg_recebida, 1000);
     msg_recebida[nrec] = '\0';
+    pthread_mutex_unlock(&em);
 
     return msg_recebida;
 }
@@ -196,14 +237,17 @@ void controle_temperatura(void *arguments) {
         char mensagem_enviada[1000];
 
         // Realiza seu trabalho.
-        pthread_mutex_lock(&em);
+        // Controle de entrada de água fria.
+        ni = controle_ni();
+        sprintf(mensagem_enviada, "%s%.1f", "ani", ni);
+        strcpy(mensagem_recebida, communicate_socket(args, mensagem_enviada));
 
-        na += calculo_controle_temperatura();
-        sprintf(mensagem_enviada, "%s%.2f", "ana", na);
+        // Controle de entrada de calor.
+        q = controle_q();
+        sprintf(mensagem_enviada, "%s%.1f", "aq-", q);
         strcpy(mensagem_recebida, communicate_socket(args, mensagem_enviada));
 
         //this will copy the returned value of createStr() into a[]
-        pthread_mutex_unlock(&em);
 
         // Calcula início do proximo periodo.
         t.tv_nsec += periodo;
@@ -214,9 +258,15 @@ void controle_temperatura(void *arguments) {
     }
 }
 
-float calculo_controle_temperatura() {
+float calculo_controle_temperatura(float Kp , float Kd) 
+{
+    // Constantes globais.
+    // S, P, B, R.
+
     // Variáveis globais.
-    // Na,
+    // temperatura, temp, na, ni, ta ti, h.
+
+    if(h ==0 ) h = 0.1;
 
     // Variáveis calculadas.
     float C = S * P * B * h;
@@ -224,51 +274,72 @@ float calculo_controle_temperatura() {
     float qe = (temp - ta) / R;
     float qa = na * S * (80 - temp);
     float qt = (q + qi + qa - qe);
-    float derivada_temperatura_sobre_tempo = (1 / C) * qt;
+    float deriv_temp_sobre_tempo = (1 / C) * qt;
 
     // Constantes setadas experimentalmente.
-    float Kp = 1;
-    float Kd = .1;
+    //Kp, Kd.
 
-    float erro = (temp - temperatura) / temperatura;
+    //Cálculo do erro.
+    float erro = (temp_ref - temp) / temp_ref;
+    
+    // Saída "PD".
+    float output =  erro * Kp + deriv_temp_sobre_tempo * Kd; 
 
-    //Saída;
-    float output = na * (derivada_temperatura_sobre_tempo * Kd + Kp) * erro;
-    printf("%.2f \n ", derivada_temperatura_sobre_tempo);
     return output;
 }
 
-void controle_nivel_agua(void *arguments) {
-    struct arg_struct *args = arguments;
-    long int periodo = 70000000;  // 70ms
+float controle_ni(void){
+    float novo_ni = calculo_controle_temperatura(-10000,1);
 
-    // Lê a hora atual, coloca em t.
+    if(novo_ni > 100)  novo_ni = 100;
+    else if(novo_ni < 0 )  novo_ni = 0;
+
+    return novo_ni;
+}
+
+float controle_q(void){
+    float novo_q = calculo_controle_temperatura(100000000, 10000);
+
+    if(novo_q > 1000000)  novo_q = 1000000;
+    else if(novo_q < 0 )  novo_q = 0;
+
+    return novo_q;
+}
+
+
+void controle_nivel_agua(void *arguments){
+    struct arg_struct *args = arguments;
+
+    long int periodo = 70000000;  // 70ms.
+
+    // Le a hora atual, coloca em t.
     clock_gettime(CLOCK_MONOTONIC, &t);
 
-    // Tarefa periodica iniciará em 1 segundo.
+    // Tarefa periódica iniciará em 1 segundo.
     t.tv_sec++;
 
     while (1) {
-        // Espera ateh início do proximo período.
+        // Espera até início do próximo período.
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
 
-        pthread_mutex_lock(&em);
+        char mensagem_recebida[1000];
+        char mensagem_enviada[1000];
+
         // Realiza seu trabalho.
-        /*
-        char s[1000];
-        sprintf(s, "%s%.2f", "ani", ni);
-        communicate_socket(args, s);
 
-        sprintf(s, "%s%.2f", "ana", na);
-        communicate_socket(args, s);
+        // Controle de entrada de água aquecida a 80ºC.
+        na = controle_na();
+        sprintf(mensagem_enviada, "%s%.1f", "ana", na);
+        strcpy(mensagem_recebida, communicate_socket(args, mensagem_enviada));
 
-        sprintf(s, "%s%.2f", "anf", nf);
-        communicate_socket(args, s);
-        */
+        // Controle de saída para o esgoto.
+        nf = controle_nf();
+        sprintf(mensagem_enviada, "%s%.1f", "anf", nf);
+        strcpy(mensagem_recebida, communicate_socket(args, mensagem_enviada));
 
-        pthread_mutex_unlock(&em);
+        //this will copy the returned value of createStr() into a[]
 
-        // Calcula início do próximo período.
+        // Calcula início do proximo periodo.
         t.tv_nsec += periodo;
         while (t.tv_nsec >= NSEC_PER_SEC) {
             t.tv_nsec -= NSEC_PER_SEC;
@@ -277,9 +348,62 @@ void controle_nivel_agua(void *arguments) {
     }
 }
 
+float calculo_controle_nivel_agua(float Kp , float Kd){
+    // Constantes globais.
+    // S, P, B, R.
+
+    // Variáveis globais.
+    // temperatura, temp, na, ni, ta ti, h.
+
+    // Variáveis calculadas.
+    float deriv_vol_sobre_tempo = (1/P) * (ni + na - no - nf);
+    // Dedução: V = B * h; 
+    // Dedução: H = V / B 
+    float deriv_altura_sobre_tempo = (1/B) * deriv_vol_sobre_tempo;
+
+    // Constantes setadas experimentalmente.
+    //Kp, Kd.
+
+    //Cálculo do erro.
+    float erro = (h_ref - h) / h_ref;
+    
+    // Saída "PD".
+    float output =  erro * Kp + deriv_altura_sobre_tempo * Kd; 
+
+    return output;
+}
+
+float controle_ni_nivel_agua(void){
+    float novo_ni = calculo_controle_nivel_agua(10000,1);
+
+    if(novo_ni > 100)  novo_ni = 100;
+    else if(novo_ni < 0 )  novo_ni = 0;
+
+    return novo_ni;
+}
+
+float controle_na(void){
+    float novo_na = calculo_controle_nivel_agua(10000,1);
+
+    if(novo_na > 10)  novo_na = 10;
+    else if(novo_na < 0 )  novo_na = 0;
+
+    return novo_na;
+}
+
+float controle_nf(void){
+    float novo_nf = calculo_controle_nivel_agua(-10000,1);
+
+    if(novo_nf > 100)  novo_nf = 100;
+    else if(novo_nf < 0 )  novo_nf = 0;
+
+    return novo_nf;
+}
+
 void alarme(void) {
-    if (temp > limite_atual) {
-        printf("%s %.2fºC\n\n\r", MSG_ALARME, temp);
+    if (temp > temp_alarme_ref) {
+        flag_alarme = 1;
+        printf("%s %.2fºC\n\n\r", "Alarme! Temperatura está acima de 30ºC:", temp);
     }
 }
 
@@ -290,19 +414,15 @@ void verifica_temperatura(void *arguments) {
     // Lê a hora atual, coloca em t.
     clock_gettime(CLOCK_MONOTONIC, &t);
 
-    // Tarefa periodica iniciará em 1 segundo.
+    // Tarefa periódica iniciará em 1 segundo.
     t.tv_sec++;
 
     while (1) {
-        // Espera ateh inicio do proximo periodo
+        // Espera até início do próximo período
 
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
 
-        pthread_mutex_lock(&em);
-        alarme();
-        pthread_mutex_unlock(&em);
-
-        // Calcula inicio do proximo periodo
+        // Calcula início do próximo período.
         t.tv_nsec += periodo;
         while (t.tv_nsec >= NSEC_PER_SEC) {
             t.tv_nsec -= NSEC_PER_SEC;
@@ -346,8 +466,6 @@ void verifica_sensores(void *arguments) {
         char *s;
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
 
-        pthread_mutex_lock(&em);
-
         s = communicate_socket(args, "sta0");
         char *token = strtok(s, "sta");
         ta = atof(token);
@@ -364,7 +482,9 @@ void verifica_sensores(void *arguments) {
         token = strtok(s, "sh-");
         h = atof(token);
 
-        pthread_mutex_unlock(&em);
+        s = communicate_socket(args, "sno0");
+        token = strtok(s, "sno");
+        no = atof(token);
 
         // Calcula inicio do proximo periodo
         t.tv_nsec += periodo;

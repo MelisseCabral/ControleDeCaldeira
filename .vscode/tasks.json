@@ -2,6 +2,14 @@
   "tasks": [
     {
       "type": "shell",
+      "label": "Clear",
+      "command": "clear",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+    },
+    {
+      "type": "shell",
       "label": "C/C++: gcc-9 build active file",
       "command": "/usr/bin/gcc-9",
       "args": [
@@ -9,16 +17,12 @@
         "${file}",
         "-o",
         "${fileDirname}/${fileBasenameNoExtension}",
-        "-l",
-        "pthread"
-
+        "-pthread"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
       },
-      "problemMatcher": [
-        "$gcc"
-      ],
+      "problemMatcher": ["$gcc"],
       "group": {
         "kind": "build",
         "isDefault": true
